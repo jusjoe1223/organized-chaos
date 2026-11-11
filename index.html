@@ -6,44 +6,388 @@
 
 <head>
 
-  <meta charset="UTF-8">
+<meta charset="UTF-8">
 
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 
-  <title>Organized Chaos</title>
+<title>Organized Chaos</title>
 
-  <style>
+<style>
 
-    body {
+* { box-sizing: border-box; }
 
-      font-family: Arial, sans-serif;
+body {
 
-      background: #111827;
+  font-family: Arial, sans-serif;
 
-      color: white;
+  background: #111827;
 
-      text-align: center;
+  color: white;
 
-      padding: 30px 16px;
+  padding: 20px 16px;
 
-    }
+  margin: 0;
 
-    h1 { color: #34d399; }
+}
 
-    .card {
+h1 { color: #34d399; }
 
-      background: #1f2937;
+h2 { color: #a7f3d0; }
 
-      padding: 20px;
+.card {
 
-      border-radius: 16px;
+  background: #1f2937;
 
-      margin: 20px auto;
+  padding: 20px;
 
-      max-width: 400px;
+  border-radius: 16px;
 
-    }
+  margin: 16px auto;
 
-    button {
+  max-width: 500px;
 
-      background: #34d399;
+  text-align: left;
+
+}
+
+label { display: block; margin-top: 14px; }
+
+input, select, textarea, button {
+
+  width: 100%;
+
+  padding: 12px;
+
+  margin-top: 6px;
+
+  border-radius: 8px;
+
+  font-size: 16px;
+
+}
+
+input, select, textarea {
+
+  border: 1px solid #4b5563;
+
+  background: #374151;
+
+  color: white;
+
+}
+
+button {
+
+  background: #34d399;
+
+  color: #111827;
+
+  border: none;
+
+  font-weight: bold;
+
+  cursor: pointer;
+
+}
+
+.entry {
+
+  background: #374151;
+
+  padding: 12px;
+
+  border-radius: 8px;
+
+  margin-top: 12px;
+
+  overflow-wrap: anywhere;
+
+}
+
+.small-button {
+
+  background: #f87171;
+
+  margin-top: 10px;
+
+}
+
+.muted { color: #d1d5db; font-size: 14px; }
+
+</style>
+
+</head>
+
+<body>
+
+<h1>⚡ ORGANIZED CHAOS</h1>
+
+<p>Your work. Your progress. Your rules.</p>
+
+<div class="card">
+
+  <h2>Today's Workout</h2>
+
+  <form id="workoutForm">
+
+    <label for="date">Date</label>
+
+    <input type="date" id="date" required>
+
+    <label for="exercise">Exercise</label>
+
+    <input id="exercise" placeholder="e.g. Bicep curls" required>
+
+    <label for="sets">Sets</label>
+
+    <input type="number" id="sets" min="1" value="2" required>
+
+    <label for="reps">Reps per set</label>
+
+    <input type="number" id="reps" min="1" value="15" required>
+
+    <label for="weight">Weight (lb)</label>
+
+    <input type="number" id="weight" min="0" step="0.5" value="10" required>
+
+    <label for="notes">Notes</label>
+
+    <textarea id="notes" placeholder="How did it feel?"></textarea>
+
+    <button type="submit">Save Workout</button>
+
+  </form>
+
+</div>
+
+<div class="card">
+
+  <h2>Progress Dashboard</h2>
+
+  <p>Workouts logged: <strong id="total">0</strong></p>
+
+  <p>Exercises recorded: <strong id="exerciseTotal">0</strong></p>
+
+  <p class="muted">Your saved entries appear below.</p>
+
+</div>
+
+<div class="card">
+
+  <h2>Workout History</h2>
+
+  <div id="history">No workouts yet. Log your first one!</div>
+
+  <button type="button" id="export">Export My Data</button>
+
+</div>
+
+<script>
+
+const form = document.getElementById("workoutForm");
+
+const historyBox = document.getElementById("history");
+
+let workouts = [];
+
+try {
+
+  workouts = JSON.parse(
+
+    localStorage.getItem("organizedChaosWorkouts") || "[]"
+
+  );
+
+  if (!Array.isArray(workouts)) workouts = [];
+
+} catch {
+
+  workouts = [];
+
+}
+
+document.getElementById("date").value =
+
+  new Date().toLocaleDateString("en-CA");
+
+function saveData() {
+
+  try {
+
+    localStorage.setItem(
+
+      "organizedChaosWorkouts",
+
+      JSON.stringify(workouts)
+
+    );
+
+    return true;
+
+  } catch {
+
+    alert("Saving failed. Export your data before leaving.");
+
+    return false;
+
+  }
+
+}
+
+function render() {
+
+  document.getElementById("total").textContent = workouts.length;
+
+  document.getElementById("exerciseTotal").textContent =
+
+    workouts.reduce((sum, w) => sum + 1, 0);
+
+  historyBox.replaceChildren();
+
+  if (workouts.length === 0) {
+
+    historyBox.textContent =
+
+      "No workouts yet. Log your first one!";
+
+    return;
+
+  }
+
+  [...workouts].reverse().forEach(w => {
+
+    const entry = document.createElement("div");
+
+    entry.className = "entry";
+
+    const title = document.createElement("strong");
+
+    title.textContent = w.exercise;
+
+    const details = document.createElement("p");
+
+    details.textContent =
+
+      `${w.date} · ${w.sets} sets × ${w.reps} reps · ${w.weight} lb`;
+
+    const note = document.createElement("p");
+
+    note.textContent = w.notes || "No notes added.";
+
+    const remove = document.createElement("button");
+
+    remove.textContent = "Delete entry";
+
+    remove.className = "small-button";
+
+    remove.type = "button";
+
+    remove.addEventListener("click", () => {
+
+      if (confirm("Delete this workout entry?")) {
+
+        workouts = workouts.filter(item => item.id !== w.id);
+
+        if (saveData()) render();
+
+      }
+
+    });
+
+    entry.append(title, details, note, remove);
+
+    historyBox.append(entry);
+
+  });
+
+}
+
+form.addEventListener("submit", event => {
+
+  event.preventDefault();
+
+  const workout = {
+
+    id: Date.now().toString() + Math.random().toString(16).slice(2),
+
+    date: document.getElementById("date").value,
+
+    exercise: document.getElementById("exercise").value.trim(),
+
+    sets: Number(document.getElementById("sets").value),
+
+    reps: Number(document.getElementById("reps").value),
+
+    weight: Number(document.getElementById("weight").value),
+
+    notes: document.getElementById("notes").value.trim()
+
+  };
+
+  if (!workout.exercise || workout.sets < 1 || workout.reps < 1) {
+
+    alert("Please enter a valid exercise, number of sets, and reps.");
+
+    return;
+
+  }
+
+  workouts.push(workout);
+
+  if (saveData()) {
+
+    form.reset();
+
+    document.getElementById("date").value =
+
+      new Date().toLocaleDateString("en-CA");
+
+    document.getElementById("sets").value = 2;
+
+    document.getElementById("reps").value = 15;
+
+    document.getElementById("weight").value = 10;
+
+    render();
+
+    alert("Workout saved!");
+
+  } else {
+
+    workouts.pop();
+
+  }
+
+});
+
+document.getElementById("export").addEventListener("click", () => {
+
+  const file = new Blob(
+
+    [JSON.stringify(workouts, null, 2)],
+
+    { type: "application/json" }
+
+  );
+
+  const url = URL.createObjectURL(file);
+
+  const link = document.createElement("a");
+
+  link.href = url;
+
+  link.download = "organized-chaos-workouts.json";
+
+  link.click();
+
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+});
+
+render();
+
+</script>
+
+</body>
+
+</html>
