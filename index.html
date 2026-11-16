@@ -482,7 +482,8 @@ renderHistory();
   getEntries: () => entries,
   replaceEntries: (nextEntries) => {
     entries = nextEntries;
-    saveEntries();
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
+    renderHistory();
   }
 };
 })();
@@ -491,6 +492,8 @@ renderHistory();
   <!-- OUTGROW cloud connection -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script>
+  "use strict";
+
   const OUTGROW_SUPABASE_URL = "https://bvxlzrhiscczsyooadel.supabase.co";
   const OUTGROW_SUPABASE_KEY = "sb_publishable_at8jdJVceOX7Y7ZOegPktg_Z9I74MdJ";
 
@@ -498,6 +501,251 @@ renderHistory();
     OUTGROW_SUPABASE_URL,
     OUTGROW_SUPABASE_KEY
   );
+
+  let outgrowUser = null;
+  let cloudReady = false;
+  let syncRunning = false;
+
+  const authPanel = document.createElement("section");
+  authPanel.className = "panel";
+  authPanel.innerHTML = `
+    <h2>OUTGROW Cloud Sync</h2>
+    <p id="cloudStatus" role="status">Checking account status...</p>
+    <form id="cloudAuthForm">
+      <label for="cloudEmail">Email</label>
+      <input id="cloudEmail" type="email" autocomplete="email" required>
+      <label for="cloudPassword">Password</label>
+      <input id="cloudPassword" type="password"
+        autocomplete="current-password" minlength="6" required>
+      <div class="actions">
+        <button class="primary" id="cloudSignIn" type="submit">Sign In</button>
+        <button class="secondary" id="cloudSignUp" type="button">Create Account</button>
+        <button class="secondary hidden" id="cloudSignOut" type="button">Sign Out</button>
+      </div>
+    </form>
+    <p class="small">Sign in with the same account on each device to sync workout entries. Your device's local entries remain saved.</p>
+  `;
+
+  const main = document.querySelector("main");
+  main.insertBefore(authPanel, main.children[1]);
+
+  const statusEl = document.getElementById("cloudStatus");
+  const authForm = document.getElementById("cloudAuthForm");
+  const emailEl = document.getElementById("cloudEmail");
+  const passwordEl = document.getElementById("cloudPassword");
+  const signInButton = document.getElementById("cloudSignIn");
+  const signUpButton = document.getElementById("cloudSignUp");
+  const signOutButton = document.getElementById("cloudSignOut");
+
+  function cloudStatus(message) {
+    statusEl.textContent = message;
+  }
+
+  function showSignedIn(user) {
+    outgrowUser = user;
+    cloudReady = false;
+
+    const signedIn = Boolean(user);
+    emailEl.disabled = signedIn;
+    passwordEl.classList.toggle("hidden", signedIn);
+    signInButton.classList.toggle("hidden", signedIn);
+    signUpButton.classList.toggle("hidden", signedIn);
+    signOutButton.classList.toggle("hidden", !signedIn);
+
+    if (signedIn) {
+      cloudStatus("Signed in as " + user.email + ". Preparing sync...");
+    } else {
+      cloudStatus("Sign in or create an account to sync your workouts.");
+    }
+  }
+
+  async function syncCloudEntries() {
+    if (!outgrowUser || syncRunning) return;
+
+    syncRunning = true;
+    cloudReady = false;
+
+    try {
+      const user = outgrowUser;
+
+      const { data: rows, error } = await outgrowSupabase
+        .from("workout_entries")
+        .select("id, data")
+        .eq("user_id", user.id);
+
+      if (error) throw error;
+
+      // Keep cloud records and local records, matching by the app's entry ID.
+      // If an ID exists in both places, the local version takes precedence.
+      const merged = new Map();
+
+      (rows || []).forEach(row => {
+        if (row.data && row.data.id != null) {
+          merged.set(String(row.data.id), row.data);
+        }
+      });
+
+      const localEntries = window.OUTGROW.getEntries();
+
+      localEntries.forEach(entry => {
+        merged.set(String(entry.id), entry);
+      });
+
+      const allEntries = Array.from(merged.values());
+
+      // Save the merged list locally without triggering another sync.
+      window.OUTGROW.replaceEntries(allEntries);
+
+      // Refresh the cloud snapshot after merging.
+      const { data: refreshedRows, error: refreshError } =
+        await outgrowSupabase
+          .from("workout_entries")
+          .select("id, data")
+          .eq("user_id", user.id);
+
+      if (refreshError) throw refreshError;
+
+      const rowsByEntryId = new Map();
+
+      (refreshedRows || []).forEach(row => {
+        if (row.data && row.data.id != null) {
+          rowsByEntryId.set(String(row.data.id), row);
+        }
+      });
+
+      for (const entry of allEntries) {
+        if (outgrowUser?.id !== user.id) break;
+
+        const existing = rowsByEntryId.get(String(entry.id));
+
+        const payload = {
+          user_id: user.id,
+          entry_date: entry.date,
+          entry_type: entry.type,
+          data: entry
+        };
+
+        const result = existing
+          ? await outgrowSupabase
+              .from("workout_entries")
+              .update(payload)
+              .eq("id", existing.id)
+              .eq("user_id", user.id)
+          : await outgrowSupabase
+              .from("workout_entries")
+              .insert(payload);
+
+        if (result.error) throw result.error;
+      }
+
+      if (outgrowUser?.id === user.id) {
+        cloudReady = true;
+        cloudStatus(
+          "Synced " + allEntries.length +
+          " entries. Cloud backup is up to date."
+        );
+      }
+    } catch (error) {
+      console.error("OUTGROW cloud sync failed:", error);
+      cloudStatus(
+        "Sync failed: " + error.message +
+        ". Your device's local entries remain saved."
+      );
+    } finally {
+      syncRunning = false;
+    }
+  }
+
+  // The existing saveEntries() function calls this after local saves.
+  window.outgrowCloudSync = function() {
+    if (cloudReady && outgrowUser && !syncRunning) {
+      void syncCloudEntries();
+    }
+  };
+
+  authForm.addEventListener("submit", async event => {
+    event.preventDefault();
+    signInButton.disabled = true;
+    cloudStatus("Signing in...");
+
+    try {
+      const { data, error } = await outgrowSupabase.auth.signInWithPassword({
+        email: emailEl.value.trim(),
+        password: passwordEl.value
+      });
+
+      if (error) throw error;
+
+      showSignedIn(data.user);
+      await syncCloudEntries();
+    } catch (error) {
+      cloudStatus("Sign-in failed: " + error.message);
+    } finally {
+      signInButton.disabled = false;
+    }
+  });
+
+  signUpButton.addEventListener("click", async () => {
+    signUpButton.disabled = true;
+    cloudStatus("Creating account...");
+
+    try {
+      const { data, error } = await outgrowSupabase.auth.signUp({
+        email: emailEl.value.trim(),
+        password: passwordEl.value
+      });
+
+      if (error) throw error;
+
+      if (data.session && data.user) {
+        showSignedIn(data.user);
+        await syncCloudEntries();
+      } else {
+        cloudStatus(
+          "Account created. Check your email to confirm it, then sign in."
+        );
+      }
+    } catch (error) {
+      cloudStatus("Account creation failed: " + error.message);
+    } finally {
+      signUpButton.disabled = false;
+    }
+  });
+
+  signOutButton.addEventListener("click", async () => {
+    cloudReady = false;
+
+    const { error } = await outgrowSupabase.auth.signOut();
+
+    if (error) {
+      cloudStatus("Sign-out failed: " + error.message);
+      return;
+    }
+
+    showSignedIn(null);
+    cloudStatus("Signed out. Local workout history remains saved.");
+  });
+
+  outgrowSupabase.auth.onAuthStateChange((event, session) => {
+    showSignedIn(session ? session.user : null);
+
+    if (session && event !== "INITIAL_SESSION") {
+      setTimeout(() => void syncCloudEntries(), 0);
+    }
+  });
+
+  outgrowSupabase.auth.getSession().then(({ data, error }) => {
+    if (error) {
+      cloudStatus("Could not check sign-in status: " + error.message);
+      return;
+    }
+
+    showSignedIn(data.session ? data.session.user : null);
+
+    if (data.session) {
+      void syncCloudEntries();
+    }
+  });
   </script>
   </body>
   </html>
