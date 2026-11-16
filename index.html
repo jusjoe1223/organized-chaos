@@ -477,5 +477,16 @@ updateDayType();
 renderHistory();
 })();
 </script>
+  <!-- OUTGROW cloud connection -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+const OUTGROW_SUPABASE_URL = "https://bvxlzrhiscczsyooadel.supabase.co";
+const OUTGROW_SUPABASE_KEY = "sb_publishable_at8jdJVceOX7Y7ZOegPktg_Z9I74MdJ";
+
+const outgrowSupabase = window.supabase.createClient(
+  OUTGROW_SUPABASE_URL,
+  OUTGROW_SUPABASE_KEY
+);
+
 </body>
 </html>
