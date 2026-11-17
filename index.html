@@ -417,11 +417,16 @@ function renderHistory(){
     edit.addEventListener("click",()=>editEntry(entry.id));
     const remove = el("button","remove","Delete");
     remove.type = "button";
-    remove.addEventListener("click",()=>{
-      if(!confirm("Delete this saved entry? This cannot be undone.")) return;
-      entries = entries.filter(item=>item.id !== entry.id);
-      saveEntries();
-    });
+    
+remove.addEventListener("click", async ()=>{
+  if(!confirm("Delete this saved entry? This cannot be undone.")) return;
+window.outgrowRecordDeletion(entry);
+  entries = entries.filter(item => item.id !== entry.id);
+
+  
+
+  saveEntries();
+});
     buttons.append(edit,remove);
     head.append(left,buttons);
     card.append(head);
@@ -559,6 +564,38 @@ renderHistory();
     }
   }
 
+  
+  const OUTGROW_DELETED_KEY = "outgrowDeletedEntryIds_v1";
+
+  function getPendingDeletions() {
+    try {
+      const value = JSON.parse(
+        localStorage.getItem(OUTGROW_DELETED_KEY) || "[]"
+      );
+      return Array.isArray(value) ? value : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function savePendingDeletions(ids) {
+    localStorage.setItem(OUTGROW_DELETED_KEY, JSON.stringify(ids));
+  }
+
+  window.outgrowRecordDeletion = function(entry) {
+    if (!entry || entry.id == null) return;
+
+    const ids = getPendingDeletions();
+    const id = String(entry.id);
+
+    if (!ids.some(item => String(item.id) === id)) {
+      ids.push({ id, entry });
+      savePendingDeletions(ids);
+    }
+
+    if (outgrowUser) void syncCloudEntries();
+  };
+
   async function syncCloudEntries() {
     if (!outgrowUser || syncRunning) return;
 
@@ -570,44 +607,87 @@ renderHistory();
 
       const { data: rows, error } = await outgrowSupabase
         .from("workout_entries")
-        .select("id, data")
+        .select("id, data, is_deleted")
         .eq("user_id", user.id);
 
       if (error) throw error;
 
-      // Keep cloud records and local records, matching by the app's entry ID.
-      // If an ID exists in both places, the local version takes precedence.
+      const pending = getPendingDeletions();
+
+      for (const deletion of pending) {
+        if (outgrowUser?.id !== user.id) break;
+
+        const existing = (rows || []).find(
+          row => String(row.data?.id) === String(deletion.id)
+        );
+
+        const payload = {
+          user_id: user.id,
+          entry_date: deletion.entry.date,
+          entry_type: deletion.entry.type,
+          data: deletion.entry,
+          is_deleted: true
+        };
+
+        const result = existing
+          ? await outgrowSupabase
+              .from("workout_entries")
+              .update({ is_deleted: true })
+              .eq("id", existing.id)
+              .eq("user_id", user.id)
+          : await outgrowSupabase
+              .from("workout_entries")
+              .insert(payload);
+
+        if (result.error) throw result.error;
+      }
+
+      if (outgrowUser?.id !== user.id) return;
+
+      savePendingDeletions([]);
+
+      const { data: freshRows, error: freshError } =
+        await outgrowSupabase
+          .from("workout_entries")
+          .select("id, data, is_deleted")
+          .eq("user_id", user.id);
+
+      if (freshError) throw freshError;
+
+      const deletedIds = new Set(
+        (freshRows || [])
+          .filter(row => row.is_deleted)
+          .map(row => String(row.data?.id))
+      );
+
       const merged = new Map();
 
-      (rows || []).forEach(row => {
-        if (row.data && row.data.id != null) {
+      (freshRows || []).forEach(row => {
+        if (
+          !row.is_deleted &&
+          row.data &&
+          row.data.id != null &&
+          !deletedIds.has(String(row.data.id))
+        ) {
           merged.set(String(row.data.id), row.data);
         }
       });
 
-      const localEntries = window.OUTGROW.getEntries();
+      window.OUTGROW.getEntries().forEach(entry => {
+        const id = String(entry.id);
 
-      localEntries.forEach(entry => {
-        merged.set(String(entry.id), entry);
+        if (!deletedIds.has(id)) {
+          merged.set(id, entry);
+        }
       });
 
       const allEntries = Array.from(merged.values());
 
-      // Save the merged list locally without triggering another sync.
       window.OUTGROW.replaceEntries(allEntries);
-
-      // Refresh the cloud snapshot after merging.
-      const { data: refreshedRows, error: refreshError } =
-        await outgrowSupabase
-          .from("workout_entries")
-          .select("id, data")
-          .eq("user_id", user.id);
-
-      if (refreshError) throw refreshError;
 
       const rowsByEntryId = new Map();
 
-      (refreshedRows || []).forEach(row => {
+      (freshRows || []).forEach(row => {
         if (row.data && row.data.id != null) {
           rowsByEntryId.set(String(row.data.id), row);
         }
@@ -618,11 +698,14 @@ renderHistory();
 
         const existing = rowsByEntryId.get(String(entry.id));
 
+        if (existing?.is_deleted) continue;
+
         const payload = {
           user_id: user.id,
           entry_date: entry.date,
           entry_type: entry.type,
-          data: entry
+          data: entry,
+          is_deleted: false
         };
 
         const result = existing
@@ -656,12 +739,12 @@ renderHistory();
     }
   }
 
-  // The existing saveEntries() function calls this after local saves.
   window.outgrowCloudSync = function() {
-    if (cloudReady && outgrowUser && !syncRunning) {
+    if (outgrowUser && !syncRunning) {
       void syncCloudEntries();
     }
   };
+
 
   authForm.addEventListener("submit", async event => {
     event.preventDefault();
